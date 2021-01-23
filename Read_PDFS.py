@@ -97,7 +97,7 @@ def Find_Word_in_Pdfs(folder,search_Word,tolerance = 1,print_me = True):
 
 # # # # INPUTS # # # #
 folder          = r'C:\Users\medad\Work\Project_argi\References'
-search_Word     = "affected"
+search_Word     = "learning"
 tolerance       = 0.90
 
 # Main
