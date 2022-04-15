@@ -2,11 +2,8 @@
 
 import sys,os
 from PyQt6.QtWidgets import QFileDialog,QApplication, QWidget, QTableWidget, QTableWidgetItem, \
-    QPushButton, QHeaderView, QHBoxLayout, QVBoxLayout,QLineEdit,QTextEdit,QLabel,QMainWindow
+    QPushButton, QVBoxLayout,QLabel,QProgressBar
 
-from PyQt6.QtGui import QIcon, QAction
-
-from PyQt6.QtCore import Qt
 import pandas as pd # pip install pandas
 
 from pathlib import Path
@@ -44,13 +41,17 @@ class MyApp(QWidget):
         layout.addWidget(self.table)
 
         # load Data
-        self.button = QPushButton('&Load Data')
+        self.button = QPushButton('&Browse Data')
         self.button.clicked.connect(lambda _, sheet_name= '': self.loadExcelData(self.showDialog()))
         layout.addWidget(self.button)
 
-        self.button2 = QPushButton('close')
+        self.button2 = QPushButton('Run')
         self.button2.clicked.connect(self.closeApp)
         layout.addWidget(self.button2)
+
+
+        self.prog_bar = QProgressBar(self)
+        self.prog_bar.setGeometry(230, 380, 250, 30)
 
 
     def closeApp(self):
@@ -60,7 +61,7 @@ class MyApp(QWidget):
 
         home_dir = str(Path.home())
         fname = QFileDialog.getOpenFileName(self, 'Open file', home_dir)
-
+        self.status.setText(fname[0])
         if fname[0]:
             return fname[0]
 
@@ -88,9 +89,11 @@ class MyApp(QWidget):
         # returns pandas array object
         for row in df.iterrows():
             values = row[1]
+            value2 = self.prog_bar.value()
             for col_index, value in enumerate(values):
                 if isinstance(value, (float, int)):
                     value = '{0:0,.0f}'.format(value)
+                    self.prog_bar.setValue(value2 + 1)
                 tableItem = QTableWidgetItem(str(value))
                 self.table.setItem(row[0], col_index, tableItem)
 
@@ -115,3 +118,6 @@ if __name__ == '__main__':
         sys.exit(app.exec())
     except SystemExit:
         print('Closing Window...')
+
+
+        
