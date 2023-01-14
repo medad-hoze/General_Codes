@@ -4,8 +4,20 @@
 import pandas as pd
 import pyodbc
 import arcpy,os
+import re
 
 arcpy.env.overwriteOutput = True
+
+def round_polygon(polygon_str):
+    # Use regular expressions to extract the coordinates
+    coordinates         = re.findall(r'\d+\.\d+', polygon_str)
+    rounded_coordinates = [round(float(c), 3) for c in coordinates]
+
+    # Replace the original coordinates with the rounded coordinates in the string
+    for i, coord in enumerate(coordinates):
+        polygon_str = polygon_str.replace(coord, str(rounded_coordinates[i]))
+
+    return polygon_str
 
 
 def get_sql_cursor( server = 'MEDADHOZE-LAP\SQLEXPRESS', database = 'test', username = '', password = ''):
@@ -120,7 +132,9 @@ def insert_to_SQL(df,table_name, server = 'MEDADHOZE-LAP\SQLEXPRESS', database =
         all_temp = '('
         for i in item:
             if len(str(i)) > 4000:
-                i = 'nan'
+                i = round_polygon(i)
+                if len(str(i)) > 4000:
+                    i = 'nan'
             temp =  str_to_sql(i) + ","
             all_temp += temp
         all_temp = all_temp[:-1] + ')'
@@ -162,7 +176,7 @@ def Create_Layer_from_df(merge,New_layer):
 
     list_            = merge.values.tolist()
 
-    dict_type = {'MULTIPOLYGON':'POLYGON','POINT':'POINT','LINE':'POLYLINE','POLYLINE':'POLYLINE'}
+    dict_type = {'MULTIPOLYGON':'POLYGON','POINT':'POINT','LINE':'POLYLINE','POLYLINE':'POLYLINE','MULTILINESTRINGZ':'POLYLINE'}
 
     if  'SHAPEWKT' in columns:
         geom_type = merge['SHAPEWKT'].tolist()[0]
@@ -219,7 +233,7 @@ def Create_Table_from_df(merge,New_layer):
     del in_rows
 
 
-layer     = r'C:\Users\Administrator\Desktop\ArcpyToolsBox\test\New File Geodatabase.gdb\Parcels2D'
+layer     = r'C:\Users\Administrator\Desktop\ArcpyToolsBox\test\New File Geodatabase.gdb\poly1'
 New_layer = layer + '_new'
 
 df        = Read_Fc(layer)
