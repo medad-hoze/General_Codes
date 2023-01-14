@@ -119,6 +119,8 @@ def insert_to_SQL(df,table_name, server = 'MEDADHOZE-LAP\SQLEXPRESS', database =
     for item in varlist:
         all_temp = '('
         for i in item:
+            if len(str(i)) > 4000:
+                i = 'nan'
             temp =  str_to_sql(i) + ","
             all_temp += temp
         all_temp = all_temp[:-1] + ')'
@@ -133,7 +135,7 @@ def insert_to_SQL(df,table_name, server = 'MEDADHOZE-LAP\SQLEXPRESS', database =
     
 
     print ('Number of rows that didnt enter the database: {}'.format(num_error))
-    print ('can be cause because double key value or geometry is to big')
+    print ('can be cause because double key value')
 
     conn.close()
 
