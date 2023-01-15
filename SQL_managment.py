@@ -1,0 +1,269 @@
+# -*- coding: utf-8 -*-
+
+
+import pandas as pd
+import pyodbc
+import arcpy,os
+import re
+
+import binascii
+
+arcpy.env.overwriteOutput = True
+
+
+def get_sql_cursor( server = 'MEDADHOZE-LAP\SQLEXPRESS', database = 'test', username = '', password = ''):
+
+    conn_str = f"DRIVER={{SQL Server}};SERVER={server};DATABASE={database};UID={username};PWD={password}; Trusted_Connection=yes"
+    conn   = pyodbc.connect(conn_str)
+    cursor = conn.cursor()
+    return conn,cursor
+
+
+def get_data(cursor,tbl_name):
+
+    cursor.execute(f"SELECT * FROM {tbl_name}")
+    columns = [column[0] for column in cursor.description]
+ 
+    cursor.execute("SELECT * FROM {}".format(tbl_name))
+    rows = cursor.fetchall()
+    df   = pd.DataFrame.from_records(rows,columns = columns)
+
+    return df
+
+
+def create_table_template(table_name, column_data):
+    # Start building the SQL statement
+    sql = "CREATE TABLE {} (".format(table_name)
+
+    # Add the column names and datatype to the SQL statement
+    for column_name, datatype, constraint in column_data:
+        sql += "\n\t{} {}{},".format(column_name,datatype,constraint)
+
+    # Add the closing parenthesis
+    sql += "\n);"
+
+    return sql
+
+def str_to_sql(i):
+    if isinstance(i,str) or i.__class__.__name__ == 'Timestamp':
+        i = str(i).replace("'","")
+        if len(i)> 0:
+            return f"'{i}'"
+        return "'null'"
+    elif str(i) == 'nan':
+        return '0'
+    elif isinstance(i,tuple):
+        return "'" + str(i) + "'"
+    else:
+        return str(int(i))
+
+def create_SQL_table(df,table_name, server = 'MEDADHOZE-LAP\SQLEXPRESS', database = 'test', username = '', password = ''):
+
+
+    conn,cursor = get_sql_cursor(server, database , username , password )
+    dict_types  = {'int64':'NUMERIC','object':'VARCHAR(255)','float64':'REAL',\
+                   'int32':'NUMERIC','<M8[ns]':'VARCHAR(255)','datetime64[ns]':'VARCHAR(255)'}
+
+    df.columns  = df.columns.str.replace("[#,@,&,',' ']", '')
+    columns     = ['name_' + str(i) for i in list(df.columns) if str(i).isdigit()]
+    columns     = dict(zip(list(df.columns),columns))
+
+    df.rename(columns =columns,inplace = True)
+
+    dict_col_type = [(col_name,dict_types[str(type_)]) 
+                    for col_name, type_ in df.dtypes.to_dict().items()]
+
+    key_     = dict_col_type[0]
+    data     = [i + (" NULL",) for i in dict_col_type[1:]]
+    col_data = [(key_[0],'INT'," PRIMARY KEY IDENTITY(1,1)")]
+
+    col_data.extend(data[0:])
+
+    sql      = create_table_template(table_name, col_data)
+    try:
+        cursor.execute(f'DROP TABLE {table_name}')
+    except:
+        pass
+
+    cursor.execute(sql)
+    print ('Created table')
+    cursor.commit()
+
+    conn.close()
+
+
+def insert_to_SQL(df,table_name, server , database , username , password ):
+
+
+    conn,cursor = get_sql_cursor(server, database , username , password )
+
+    varlist  = df.values.tolist()
+
+    num_of_col = len(df.columns)
+    num_val    = len(varlist[0])
+    if num_of_col != num_val:
+        print ('Number of columns is not equal to number of values')
+        return
+
+    col_insert =  ', '.join(df.columns.to_list())
+
+    cursor.execute(f'SET IDENTITY_INSERT {table_name} ON')
+    cursor.commit()
+
+    try:
+        cursor.execute(f"ALTER TABLE {table_name} ALTER COLUMN SHAPE NVARCHAR(4000)")
+        cursor.commit()
+    except:
+        pass
+
+    num_error = 0
+    more_then_4000 = 0
+    for item in varlist:
+        all_temp = '('
+        for i in item:
+            if len(str(i)) >3999:
+                i = 'nan'
+                more_then_4000+=1
+            temp =  str_to_sql(i) + ","
+            all_temp += temp
+        all_temp = all_temp[:-1] + ')'
+
+        try:
+            query = f"INSERT into {table_name} ({col_insert}) VALUES {all_temp}"
+            cursor.execute(query)
+            cursor.commit()
+        except:
+            num_error += 1
+            pass
+
+    if more_then_4000 > 0:
+        print ('Number of rows that didnt enter geometry to the database: {}'.format(more_then_4000))
+        print ('can be cause because geometry is more then 4000 char')
+    
+    if num_error > 0:
+        print ('Number of rows that didnt enter the database: {}'.format(num_error))
+        print ('can be cause because double key value')
+
+    conn.close()
+
+
+
+def Read_Fc(addr,num_rows = 9999999):
+
+    print ("read: Read Fc")
+    columns = [f.name for f in arcpy.ListFields(addr) if f.name not in ('SHAPE','Shape')] + ['SHAPE@']
+    df       = pd.DataFrame(data = [list(row[:-1]) + [str(binascii.hexlify(row[-1].WKB))] for row in arcpy.da.SearchCursor\
+               (addr,columns,"\"OBJECTID\" < {}".format(num_rows))],columns = columns)
+
+    return df
+
+
+
+def Create_Layer_from_df(merge,New_layer):
+
+    print ("Create Later from df")
+    print ("total rows: {}".format(str(merge.shape[0])))
+
+    columns          = list(merge.columns)
+    list_            = merge.values.tolist()
+
+    dict_type = {'MULTIPOLYGON':'POLYGON','POINT':'POINT','LINE':'POLYLINE','POLYLINE':'POLYLINE','MULTILINESTRINGZ':'POLYLINE','MULTIPOLYGONZ':'POLYGON'}
+
+    if  'SHAPE' in columns:
+        geom = bytearray.fromhex(merge['SHAPE'].tolist()[0][1:])
+        geom = arcpy.FromWKB(geom)
+        geom_type = ''.join([x for x in geom.WKT if x.isalpha()])
+        geom = dict_type[geom_type]
+
+    gdb_proc,fc_name = os.path.split(New_layer)
+
+    Fc_rimon         = arcpy.CreateFeatureclass_management (gdb_proc, fc_name, geom)
+
+    dict_types = {'int64':'LONG','object':'TEXT','float64':'DOUBLE',\
+                  'int32':'SHORT','<M8[ns]':'DATE','datetime64[ns]':'DATE'}
+
+    dict_col_type = {col_name:dict_types[str(type_)] for col_name, type_ in merge.dtypes.to_dict().items()}
+
+    for i in columns:
+        if i not in ('OBJECTID','SHAPE'):
+            arcpy.AddField_management(Fc_rimon,i,dict_col_type[i])
+
+
+    columns = [i for i in columns if i != 'SHAPE']
+    columns = columns + ['SHAPE@']
+    in_rows = arcpy.da.InsertCursor(Fc_rimon,columns)
+
+    for i in list_:
+        if str(i[-1]) != 'nan':
+            geomWKT = bytearray.fromhex(i[-1][1:])
+            in_rows.insertRow (i[:-1] + [arcpy.FromWKB(geomWKT)])
+        else:
+            in_rows.insertRow (i[:-1] + [None])
+
+
+def Create_Table_from_df(df,New_layer):
+    '''
+    Create Table from df
+    [df]        = dataframe
+    [New_layer] = path to new layer
+    OUTPUT: None
+    '''
+
+    print ("Create Table from df")
+    print ("total Assets: {}".format(str(df.shape[0])))
+
+    columns          = list(df.columns)
+    gdb_proc,fc_name = os.path.split(New_layer)
+
+    Fc_rimon = arcpy.CreateTable_management(gdb_proc, fc_name)
+
+    dict_types = {'int64':'LONG','object':'TEXT','float64':'DOUBLE',\
+                  'int32':'SHORT','<M8[ns]':'DATE','datetime64[ns]':'DATE'}
+
+    dict_col_type = {col_name:dict_types[str(type_)] for col_name, type_ in df.dtypes.to_dict().items()}
+
+    for i in columns:arcpy.AddField_management(Fc_rimon,i,dict_col_type[i])
+
+    in_rows = arcpy.da.InsertCursor(Fc_rimon,columns)
+    list_   = df.values.tolist()
+    for i in list_:in_rows.insertRow (i)
+    del in_rows
+
+
+def layer_to_sql(layer,sql_table_name,server, database , username , password):
+    '''
+    [query]      = sql query
+    [table_name] = name of table
+    OUTPUT: df
+    '''
+    df   = Read_Fc(layer)
+    create_SQL_table (df,sql_table_name,server, database, username, password)
+    insert_to_SQL    (df,sql_table_name,server, database, username, password)
+
+    return df
+
+
+def sql_to_layer(sql_table_name,New_layer,server, database , username , password ):
+    '''
+    [table_name] = name of table
+    [New_layer]  = path to new layer fc
+    OUTPUT: df
+    '''
+    conn,cursor = get_sql_cursor(server,database,username,password)
+    df2         = get_data(cursor,sql_table_name)
+
+    Create_Layer_from_df(df2,New_layer)
+
+
+    return df2
+
+
+
+layer     = r'C:\Users\Administrator\Desktop\ArcpyToolsBox\test\New File Geodatabase.gdb\Parcels2D'
+New_layer = layer + 'Parcels2D'
+
+conn      = {'server':'MEDADHOZE-LAP\SQLEXPRESS', 'database':'test', 'username':'','password':''}
+
+
+layer_to_sql(layer      ,'Parcels2D' ,**conn)
+sql_to_layer('Parcels2D',New_layer   ,**conn)
